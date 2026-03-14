@@ -1,11 +1,19 @@
-const CACHE_NAME = 'order-generator-pwa-v1';
+const CACHE_NAME = 'order-generator-pwa-v1.1';
 const ASSETS_TO_CACHE = [
-  './',
+    './',
   './index.html',
   './manifest.json',
-  './icons/icon1.png',
-  './icons/icon2.png',
-  'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'
+
+  './favicon.ico',
+
+  './css/style.css',
+
+  './js/app.js',
+  './js/html2canvas.min.js',
+  './js/jspdf.umd.min.js',
+
+  './icons/icon-192.png',
+  './icons/icon-512.png'
 ];
 
 self.addEventListener('install', event => {
