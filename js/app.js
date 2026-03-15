@@ -2,13 +2,25 @@ let catalog = JSON.parse(localStorage.getItem('myCatalog')) || [];
 let currentOrder = JSON.parse(localStorage.getItem('myCurrentOrder')) || [];
 let orderHistory = JSON.parse(localStorage.getItem('myOrderHistory')) || [];
 
+let paymentConfig = JSON.parse(localStorage.getItem('paymentConfig')) || {
+  wechatQr: '',
+  alipayQr: '',
+  payeeName: '',
+  paymentTitle: '请扫码付款后告知商家。',
+  showOnReceipt: true
+};
+
+
 window.onload = function () {
   restoreMeta();
   setTodayIfEmpty();
   bindEvents();
   refreshCatalogUI();
+  restorePaymentConfig();
+  refreshCatalogUI();
   refreshOrderUI();
   refreshHistoryUI();
+  updatePaymentUI();
 };
 
 function bindEvents() {
@@ -27,6 +39,8 @@ function bindEvents() {
 
   document.getElementById('catalogSearch').addEventListener('input', refreshCatalogUI);
   document.getElementById('historySearch').addEventListener('input', refreshHistoryUI);
+  document.getElementById('catalogImportInput').addEventListener('change', handleCatalogImport);
+  document.getElementById('historyImportInput').addEventListener('change', handleHistoryImport);
 
   const productSelect = document.getElementById('productSelect');
   const qtyInput = document.getElementById('orderQty');
@@ -51,7 +65,30 @@ function bindEvents() {
       addToCatalog();
     }
   });
+
+  ['payeeName', 'paymentTitle'].forEach(id => {
+    const el = document.getElementById(id);
+    el.addEventListener('input', savePaymentMeta);
+    el.addEventListener('change', savePaymentMeta);
+  });
+
+  document.getElementById('showPaymentOnReceipt').addEventListener('change', savePaymentMeta);
+
+  document.getElementById('wechatQrInput').addEventListener('change', async (e) => {
+    await handlePaymentCodeUpload('wechat', e.target.files && e.target.files[0]);
+    e.target.value = '';
+  });
+
+  document.getElementById('alipayQrInput').addEventListener('change', async (e) => {
+    await handlePaymentCodeUpload('alipay', e.target.files && e.target.files[0]);
+    e.target.value = '';
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closePaymentSettingsModal();
+  });
 }
+
 
 function makeId() {
   if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -88,6 +125,7 @@ function saveMeta() {
   };
   localStorage.setItem('orderMeta', JSON.stringify(meta));
   updateCustomerPreview();
+  updatePaymentUI();
 }
 
 function restoreMeta() {
@@ -101,12 +139,198 @@ function restoreMeta() {
   if (meta.discountHint) document.getElementById('discountHint').value = meta.discountHint;
   if (meta.orderRemark) document.getElementById('orderRemark').value = meta.orderRemark;
   updateCustomerPreview();
+  updatePaymentUI();
 }
 
 function updateCustomerPreview() {
   const name = document.getElementById('customerName').value.trim();
   document.getElementById('customerPreview').innerText = name || '未填写';
 }
+
+
+function persistPaymentConfig() {
+  try {
+    localStorage.setItem('paymentConfig', JSON.stringify(paymentConfig));
+  } catch (err) {
+    console.error(err);
+    alert('收款码图片可能太大，保存失败。建议上传截图版二维码，不要上传超大原图。');
+  }
+}
+
+function restorePaymentConfig() {
+  document.getElementById('payeeName').value = paymentConfig.payeeName || '';
+  document.getElementById('paymentTitle').value = paymentConfig.paymentTitle || '请扫码付款后告知商家。';
+  document.getElementById('showPaymentOnReceipt').checked = paymentConfig.showOnReceipt !== false;
+  updatePaymentUploadButtons();
+}
+
+function openPaymentSettingsModal() {
+  const modal = document.getElementById('paymentSettingsModal');
+  if (!modal) return;
+  modal.classList.add('show');
+  modal.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('modal-open');
+}
+
+function closePaymentSettingsModal() {
+  const modal = document.getElementById('paymentSettingsModal');
+  if (!modal) return;
+  modal.classList.remove('show');
+  modal.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('modal-open');
+}
+
+function triggerPaymentUpload(type) {
+  const input = document.getElementById(type === 'wechat' ? 'wechatQrInput' : 'alipayQrInput');
+  if (input) input.click();
+}
+
+function updatePaymentUploadButtons() {
+  const wechatBtn = document.getElementById('wechatUploadBtn');
+  const alipayBtn = document.getElementById('alipayUploadBtn');
+  if (wechatBtn) wechatBtn.textContent = paymentConfig.wechatQr ? '更换图片' : '选择图片';
+  if (alipayBtn) alipayBtn.textContent = paymentConfig.alipayQr ? '更换图片' : '选择图片';
+}
+
+function savePaymentMeta() {
+  paymentConfig.payeeName = document.getElementById('payeeName').value.trim();
+  paymentConfig.paymentTitle = document.getElementById('paymentTitle').value.trim();
+  paymentConfig.showOnReceipt = document.getElementById('showPaymentOnReceipt').checked;
+  persistPaymentConfig();
+  updatePaymentUI();
+}
+
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('读取图片失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('加载图片失败'));
+    img.src = src;
+  });
+}
+
+async function compressImageFile(file, maxSide = 720, quality = 0.82) {
+  const originalDataUrl = await readFileAsDataURL(file);
+  const img = await loadImage(originalDataUrl);
+
+  const ratio = Math.min(1, maxSide / Math.max(img.width, img.height));
+  const width = Math.max(1, Math.round(img.width * ratio));
+  const height = Math.max(1, Math.round(img.height * ratio));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(img, 0, 0, width, height);
+
+  const compressed = canvas.toDataURL('image/jpeg', quality);
+  return compressed.length < originalDataUrl.length ? compressed : originalDataUrl;
+}
+
+async function handlePaymentCodeUpload(type, file) {
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    alert('请上传图片格式的收款码。');
+    return;
+  }
+
+  try {
+    const dataUrl = await compressImageFile(file);
+    if (type === 'wechat') {
+      paymentConfig.wechatQr = dataUrl;
+    } else {
+      paymentConfig.alipayQr = dataUrl;
+    }
+    persistPaymentConfig();
+    updatePaymentUI();
+    updatePaymentUploadButtons();
+    showToast(type === 'wechat' ? '微信收款码已保存' : '支付宝收款码已保存');
+  } catch (err) {
+    console.error(err);
+    alert('上传收款码失败，请换一张图片再试。');
+  }
+}
+
+function clearPaymentCode(type) {
+  const key = type === 'wechat' ? 'wechatQr' : 'alipayQr';
+  if (!paymentConfig[key]) {
+    showToast('当前还没有可清除的收款码');
+    return;
+  }
+  const ok = confirm(`确定清除${type === 'wechat' ? '微信' : '支付宝'}收款码吗？`);
+  if (!ok) return;
+  paymentConfig[key] = '';
+  persistPaymentConfig();
+  updatePaymentUI();
+  updatePaymentUploadButtons();
+}
+
+function updatePaymentPreviewImg(imgId, emptyId, src) {
+  const img = document.getElementById(imgId);
+  const empty = document.getElementById(emptyId);
+  if (!img || !empty) return;
+
+  if (src) {
+    img.src = src;
+    img.style.display = 'block';
+    empty.style.display = 'none';
+  } else {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+    empty.style.display = 'block';
+  }
+}
+
+function updatePaymentUI() {
+  updatePaymentPreviewImg('wechatQrPreview', 'wechatQrEmpty', paymentConfig.wechatQr);
+  updatePaymentPreviewImg('alipayQrPreview', 'alipayQrEmpty', paymentConfig.alipayQr);
+  updatePaymentUploadButtons();
+
+  const receiptBlock = document.getElementById('paymentReceiptBlock');
+  const wechatCard = document.getElementById('receiptWechatCard');
+  const alipayCard = document.getElementById('receiptAlipayCard');
+  const wechatImg = document.getElementById('receiptWechatQr');
+  const alipayImg = document.getElementById('receiptAlipayQr');
+  const sub = document.getElementById('paymentReceiptSub');
+  const amount = document.getElementById('paymentAmountPreview');
+
+  const rawTotal = currentOrder.reduce((sum, item) => sum + Number(item.subtotal), 0);
+  const discountAmount = calcDiscount(rawTotal);
+  const finalAmount = Math.max(rawTotal - discountAmount, 0);
+  amount.textContent = `¥${finalAmount.toFixed(2)}`;
+
+  const descParts = [];
+  if (paymentConfig.payeeName) descParts.push(`收款方：${paymentConfig.payeeName}`);
+  if (paymentConfig.paymentTitle) descParts.push(paymentConfig.paymentTitle);
+  sub.textContent = descParts.join(' ｜ ') || '请扫码付款';
+
+  const hasWechat = Boolean(paymentConfig.wechatQr);
+  const hasAlipay = Boolean(paymentConfig.alipayQr);
+  const shouldShow = paymentConfig.showOnReceipt !== false && (hasWechat || hasAlipay);
+
+  receiptBlock.style.display = shouldShow ? 'block' : 'none';
+
+  wechatCard.style.display = hasWechat ? 'block' : 'none';
+  alipayCard.style.display = hasAlipay ? 'block' : 'none';
+
+  if (hasWechat) wechatImg.src = paymentConfig.wechatQr;
+  else wechatImg.removeAttribute('src');
+
+  if (hasAlipay) alipayImg.src = paymentConfig.alipayQr;
+  else alipayImg.removeAttribute('src');
+}
+
 
 function persistCatalog() {
   localStorage.setItem('myCatalog', JSON.stringify(catalog));
@@ -158,6 +382,13 @@ function getCurrentOrderSnapshot() {
     discountValue: isNaN(discountValue) ? '' : discountValue,
     discountHint: document.getElementById('discountHint').value.trim(),
     orderRemark: document.getElementById('orderRemark').value.trim(),
+    paymentConfig: {
+      payeeName: paymentConfig.payeeName || '',
+      paymentTitle: paymentConfig.paymentTitle || '',
+      showOnReceipt: paymentConfig.showOnReceipt !== false,
+      hasWechatQr: Boolean(paymentConfig.wechatQr),
+      hasAlipayQr: Boolean(paymentConfig.alipayQr)
+    },
     items: JSON.parse(JSON.stringify(currentOrder)),
     rawTotal,
     discountAmount,
@@ -192,6 +423,7 @@ function loadHistoryOrder(historyId) {
   document.getElementById('orderRemark').value = item.orderRemark || '';
   saveMeta();
   refreshOrderUI();
+  updatePaymentUI();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -221,6 +453,98 @@ function toggleSelectAllHistory() {
   if (boxes.length === 0) return;
   const allChecked = boxes.every(box => box.checked);
   boxes.forEach(box => { box.checked = !allChecked; });
+}
+
+
+function triggerCatalogImport() {
+  document.getElementById('catalogImportInput').click();
+}
+
+function triggerHistoryImport() {
+  document.getElementById('historyImportInput').click();
+}
+
+function exportCatalogJson() {
+  const exportData = {
+    exportType: 'catalog-json',
+    exportedAt: new Date().toISOString(),
+    catalog: catalog
+  };
+  downloadJsonFile(exportData, `商品目录_${getTodayStr()}.json`);
+}
+
+function exportHistoryJson() {
+  const exportData = {
+    exportType: 'order-history-json',
+    exportedAt: new Date().toISOString(),
+    orderHistory: orderHistory
+  };
+  downloadJsonFile(exportData, `订单历史_${getTodayStr()}.json`);
+}
+
+
+async function handleCatalogImport(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+
+  try {
+    const data = await readJsonFile(file);
+    let importedCatalog = [];
+
+    if (Array.isArray(data)) importedCatalog = data;
+    else if (Array.isArray(data.catalog)) importedCatalog = data.catalog;
+    else throw new Error('文件里没有 catalog 数组');
+
+    const normalized = normalizeCatalogItems(importedCatalog);
+    if (normalized.length === 0) {
+      alert('导入失败：没有可用的商品数据。');
+      return;
+    }
+
+    const replaceMode = confirm(`检测到 ${normalized.length} 条商品。
+点击“确定”覆盖当前商品目录；点击“取消”则追加导入。`);
+    catalog = replaceMode ? normalized : mergeCatalogItems(catalog, normalized);
+    persistCatalog();
+    refreshCatalogUI();
+    alert(`商品目录导入成功，共 ${normalized.length} 条。当前目录共 ${catalog.length} 条。`);
+  } catch (err) {
+    console.error(err);
+    alert(`商品目录导入失败：${err.message || '文件格式不正确'}`);
+  } finally {
+    event.target.value = '';
+  }
+}
+
+async function handleHistoryImport(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+
+  try {
+    const data = await readJsonFile(file);
+    let importedHistory = [];
+
+    if (Array.isArray(data)) importedHistory = data;
+    else if (Array.isArray(data.orderHistory)) importedHistory = data.orderHistory;
+    else throw new Error('文件里没有 orderHistory 数组');
+
+    const normalized = normalizeHistoryItems(importedHistory);
+    if (normalized.length === 0) {
+      alert('导入失败：没有可用的历史订单数据。');
+      return;
+    }
+
+    const replaceMode = confirm(`检测到 ${normalized.length} 条历史订单。
+点击“确定”覆盖当前订单历史；点击“取消”则追加导入。`);
+    orderHistory = replaceMode ? normalized : mergeHistoryItems(orderHistory, normalized);
+    persistHistory();
+    refreshHistoryUI();
+    alert(`订单历史导入成功，共 ${normalized.length} 条。当前历史共 ${orderHistory.length} 条。`);
+  } catch (err) {
+    console.error(err);
+    alert(`订单历史导入失败：${err.message || '文件格式不正确'}`);
+  } finally {
+    event.target.value = '';
+  }
 }
 
 function exportOrderJson() {
@@ -502,6 +826,7 @@ function newOrder() {
   setToday();
   saveMeta();
   refreshOrderUI();
+  updatePaymentUI();
   document.getElementById('customerName').focus();
 }
 
@@ -554,11 +879,127 @@ function refreshOrderUI() {
   document.getElementById('itemCount').innerText = String(currentOrder.length);
   empty.style.display = currentOrder.length === 0 ? 'block' : 'none';
   updateCustomerPreview();
+  updatePaymentUI();
 }
 
 function formatQty(qty) {
   const num = Number(qty);
   return Number.isInteger(num) ? String(num) : String(num).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+
+function downloadJsonFile(data, filename) {
+  const jsonStr = JSON.stringify(data, null, 2);
+  const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8' });
+  downloadBlob(blob, filename);
+}
+
+function readJsonFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        resolve(JSON.parse(reader.result));
+      } catch (err) {
+        reject(new Error('JSON 解析失败，请确认文件内容正确。'));
+      }
+    };
+    reader.onerror = () => reject(new Error('文件读取失败。'));
+    reader.readAsText(file, 'utf-8');
+  });
+}
+
+function normalizeCatalogItems(items) {
+  return items.map(item => {
+    const name = String(item && item.name || '').trim();
+    const unit = String(item && item.unit || '').trim();
+    const price = Number(item && item.price);
+    if (!name || !unit || !Number.isFinite(price) || price < 0) return null;
+    return {
+      id: String(item.id || makeId()),
+      name,
+      price: Number(price.toFixed(2)),
+      unit
+    };
+  }).filter(Boolean);
+}
+
+function mergeCatalogItems(oldItems, newItems) {
+  const result = [...oldItems];
+  const exists = new Set(oldItems.map(item => `${String(item.name).trim()}__${String(item.unit).trim()}`));
+  newItems.forEach(item => {
+    const key = `${item.name}__${item.unit}`;
+    if (!exists.has(key)) {
+      exists.add(key);
+      result.push(item);
+    }
+  });
+  return result;
+}
+
+function normalizeHistoryItems(items) {
+  return items.map(order => {
+    const normalizedItems = Array.isArray(order && order.items)
+      ? order.items.map(item => {
+          const name = String(item && item.name || '').trim();
+          const unit = String(item && item.unit || '').trim();
+          const price = Number(item && item.price);
+          const qty = Number(item && item.qty);
+          if (!name || !unit || !Number.isFinite(price) || price < 0 || !Number.isFinite(qty) || qty <= 0) return null;
+          return {
+            orderItemId: String(item.orderItemId || makeId()),
+            name,
+            price: Number(price.toFixed(2)),
+            unit,
+            qty: Number(qty),
+            subtotal: Number((price * qty).toFixed(2))
+          };
+        }).filter(Boolean)
+      : [];
+
+    if (normalizedItems.length === 0) return null;
+
+    const rawTotal = normalizedItems.reduce((sum, item) => sum + Number(item.subtotal), 0);
+    const discountAmount = Math.max(0, Number(order && order.discountAmount || 0));
+    const finalAmount = Math.max(rawTotal - discountAmount, 0);
+
+    return {
+      id: String(order && order.id || makeId()),
+      savedAt: order && order.savedAt ? String(order.savedAt) : new Date().toISOString(),
+      title: String(order && order.title || '顾客订货单').trim() || '顾客订货单',
+      customerName: String(order && order.customerName || '').trim(),
+      customerPhone: String(order && order.customerPhone || '').trim(),
+      orderDate: String(order && order.orderDate || getTodayStr()),
+      discountType: String(order && order.discountType || 'none'),
+      discountValue: order && order.discountValue !== undefined ? order.discountValue : '',
+      discountHint: String(order && order.discountHint || '').trim(),
+      orderRemark: String(order && order.orderRemark || '').trim(),
+      paymentConfig: {
+        payeeName: String(order && order.paymentConfig && order.paymentConfig.payeeName || '').trim(),
+        paymentTitle: String(order && order.paymentConfig && order.paymentConfig.paymentTitle || '').trim(),
+        showOnReceipt: order && order.paymentConfig ? order.paymentConfig.showOnReceipt !== false : true,
+        hasWechatQr: Boolean(order && order.paymentConfig && order.paymentConfig.hasWechatQr),
+        hasAlipayQr: Boolean(order && order.paymentConfig && order.paymentConfig.hasAlipayQr)
+      },
+      items: normalizedItems,
+      rawTotal: Number(rawTotal.toFixed(2)),
+      discountAmount: Number(discountAmount.toFixed(2)),
+      finalAmount: Number(finalAmount.toFixed(2))
+    };
+  }).filter(Boolean);
+}
+
+function mergeHistoryItems(oldItems, newItems) {
+  const result = [...oldItems];
+  const exists = new Set(oldItems.map(order => `${String(order.title || '').trim()}__${String(order.customerName || '').trim()}__${String(order.orderDate || '').trim()}__${Number(order.finalAmount || 0).toFixed(2)}`));
+  newItems.forEach(order => {
+    const key = `${String(order.title || '').trim()}__${String(order.customerName || '').trim()}__${String(order.orderDate || '').trim()}__${Number(order.finalAmount || 0).toFixed(2)}`;
+    if (!exists.has(key)) {
+      exists.add(key);
+      result.push(order);
+    }
+  });
+  return result;
 }
 
 function escapeHtml(str) {
@@ -786,7 +1227,7 @@ async function generatePDF() {
   }
 }
 
-if ('serviceWorker' in navigator) {
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   let refreshing = false;
 
   window.addEventListener('load', async () => {
