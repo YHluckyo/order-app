@@ -4,13 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>订单生成器</title>
-  <link rel="manifest" href="manifest.json" />
-  <link rel="icon" href="favicon.ico">
-  <meta name="theme-color" content="#007aff" />
-  <link rel="apple-touch-icon" href="icons/icon1.png" />
-  <link rel="stylesheet" href="css/style.css" />
-  <script src="js/html2canvas.min.js"></script>
-  <script src="js/jspdf.umd.min.js"></script>
+    <meta name="theme-color" content="#007aff" />
+  <link rel="stylesheet" href="./css/style.css" />
+  <script src="./js/html2canvas.min.js"></script>
+  <script src="./js/jspdf.umd.min.js"></script>
 </head>
 <body>
   <div class="app">
@@ -47,6 +44,11 @@
         <button class="danger" onclick="deleteSelectedCatalog()">删除勾选商品</button>
         <button class="ghost" onclick="toggleSelectAllCatalog()">全选 / 取消全选</button>
       </div>
+      <div class="stack-actions stack-actions-compact" style="margin-top:10px;">
+        <button class="ghost" onclick="exportCatalogJson()">导出商品目录</button>
+        <button class="ghost" onclick="triggerCatalogImport()">导入商品目录</button>
+      </div>
+      <input type="file" id="catalogImportInput" accept="application/json,.json" style="display:none;" />
       <div class="catalog-wrap" style="margin-top:12px; max-height: 240px; overflow-y:auto;">
         <table>
           <thead>
@@ -80,6 +82,15 @@
         <button class="primary" onclick="addToOrder()">加入订单</button>
       </div>
       <div class="muted" style="margin-top:10px;">提示：同一种商品可重复加入，适合不同规格或临时补单。选中商品后会自动聚焦数量输入框，方便连续录单。</div>
+    </div>
+    <div class="card">
+      <div class="payment-settings-summary">
+        <div>
+          <h2 style="margin-bottom:6px;">💳 收款设置</h2>
+          <div class="muted">把微信 / 支付宝收款码、本地收款说明统一放到弹窗里管理。</div>
+        </div>
+        <button class="primary" type="button" onclick="openPaymentSettingsModal()">⚙️ 收款设置</button>
+      </div>
     </div>
 
     <div class="card">
@@ -159,6 +170,30 @@
           </div>
         </div>
 
+
+        <div id="paymentReceiptBlock" class="payment-receipt-block" style="display:none;">
+          <div class="payment-receipt-head">
+            <div>
+              <div class="payment-receipt-title">扫码付款</div>
+              <div id="paymentReceiptSub" class="muted">请扫码付款</div>
+            </div>
+            <div class="payment-amount-box">
+              <div class="label">应付金额</div>
+              <div class="payment-amount" id="paymentAmountPreview">¥0.00</div>
+            </div>
+          </div>
+          <div class="payment-qr-grid">
+            <div class="receipt-qr-card" id="receiptWechatCard">
+              <div class="receipt-qr-label">微信收款码</div>
+              <img id="receiptWechatQr" alt="微信收款码" />
+            </div>
+            <div class="receipt-qr-card" id="receiptAlipayCard">
+              <div class="receipt-qr-label">支付宝收款码</div>
+              <img id="receiptAlipayQr" alt="支付宝收款码" />
+            </div>
+          </div>
+        </div>
+
         <div class="receipt-note">备注：请核对品名、数量、金额和订单备注。若已填写优惠或抹零，系统会自动按优惠后总价生成订单图片。</div>
       </div>
 
@@ -185,6 +220,11 @@
         <button class="danger" onclick="deleteSelectedHistory()">删除勾选历史</button>
         <button class="ghost" onclick="toggleSelectAllHistory()">全选 / 取消全选</button>
       </div>
+      <div class="stack-actions stack-actions-compact" style="margin-top:10px;">
+        <button class="ghost" onclick="exportHistoryJson()">导出订单历史</button>
+        <button class="ghost" onclick="triggerHistoryImport()">导入订单历史</button>
+      </div>
+      <input type="file" id="historyImportInput" accept="application/json,.json" style="display:none;" />
       <div class="field" style="margin-top:12px;">
         <label for="historySearch">搜索历史</label>
         <input type="text" id="historySearch" placeholder="按顾客名、标题、日期搜索" />
@@ -196,6 +236,69 @@
     <div class="footer-tip">数据保存在本机浏览器 / WebView 中，卸载 App 或清除数据后可能丢失。</div>
   </div>
 
-  <script src="js/app.js"></script>
+  <script src="./js/app.js"></script>
+
+
+  <div id="paymentSettingsModal" class="modal" aria-hidden="true">
+    <div class="modal-mask" onclick="closePaymentSettingsModal()"></div>
+    <div class="modal-panel payment-modal-panel" role="dialog" aria-modal="true" aria-labelledby="paymentSettingsTitle">
+      <div class="modal-head">
+        <div>
+          <div class="modal-kicker">Payment Settings</div>
+          <h3 id="paymentSettingsTitle">收款设置</h3>
+          <div class="muted">上传后的数据只保存在当前浏览器</div>
+        </div>
+        <button class="ghost small-btn" type="button" onclick="closePaymentSettingsModal()">关闭</button>
+      </div>
+
+      <div class="grid-2" style="margin-top:12px;">
+        <div class="payment-upload-box">
+          <div class="payment-upload-head">
+            <strong>微信收款码</strong>
+            <div class="payment-upload-actions">
+              <input type="file" id="wechatQrInput" accept="image/*" hidden />
+              <button class="ghost small-btn" type="button" id="wechatUploadBtn" onclick="triggerPaymentUpload('wechat')">选择图片</button>
+              <button class="ghost small-btn" type="button" onclick="clearPaymentCode('wechat')">清除</button>
+            </div>
+          </div>
+          <div class="payment-preview-box">
+            <img id="wechatQrPreview" class="payment-preview-img" alt="微信收款码预览" />
+            <div id="wechatQrEmpty" class="payment-empty-tip">暂未上传微信收款码</div>
+          </div>
+        </div>
+
+        <div class="payment-upload-box">
+          <div class="payment-upload-head">
+            <strong>支付宝收款码</strong>
+            <div class="payment-upload-actions">
+              <input type="file" id="alipayQrInput" accept="image/*" hidden />
+              <button class="ghost small-btn" type="button" id="alipayUploadBtn" onclick="triggerPaymentUpload('alipay')">选择图片</button>
+              <button class="ghost small-btn" type="button" onclick="clearPaymentCode('alipay')">清除</button>
+            </div>
+          </div>
+          <div class="payment-preview-box">
+            <img id="alipayQrPreview" class="payment-preview-img" alt="支付宝收款码预览" />
+            <div id="alipayQrEmpty" class="payment-empty-tip">暂未上传支付宝收款码</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-top:12px;">
+        <div class="field">
+          <label for="payeeName">收款方名称</label>
+          <input type="text" id="payeeName" placeholder="如：小店铺" />
+        </div>
+        <div class="field">
+          <label for="paymentTitle">收款说明</label>
+          <input type="text" id="paymentTitle" placeholder="如：请扫码付款后告知已支付" />
+        </div>
+      </div>
+
+      <label class="check-line" style="margin-top:12px;">
+        <input type="checkbox" id="showPaymentOnReceipt" checked />
+        <span>在订单底部显示收款码</span>
+      </label>
+    </div>
+  </div>
 </body>
 </html>
